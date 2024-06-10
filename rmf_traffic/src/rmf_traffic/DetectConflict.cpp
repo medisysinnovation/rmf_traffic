@@ -652,7 +652,7 @@ std::optional<DetectConflict::Conflict> detect_invasion(
       spline_b = Spline(crawl_b.current());
 
     const bool ignore = crawl_a.ignore(crawl_b.index())
-        || crawl_b.ignore(crawl_a.index());
+      || crawl_b.ignore(crawl_a.index());
 
     if (!ignore)
     {
@@ -770,7 +770,7 @@ std::optional<DetectConflict::Conflict> detect_approach(
     const DistanceDifferential D(*spline_a, *spline_b);
 
     const bool ignore = crawl_a.ignore(crawl_b.index())
-        || crawl_b.ignore(crawl_a.index());
+      || crawl_b.ignore(crawl_a.index());
 
     if (D.initially_approaching() && !ignore)
     {
@@ -888,6 +888,10 @@ std::optional<DetectConflict::Conflict> DetectConflict::Implementation::between(
   Interpolate /*interpolation*/,
   std::vector<Conflict>* output_conflicts)
 {
+
+  //Disable conflict detection
+  return std::nullopt;
+
   if (trajectory_a.size() < 2)
   {
     throw invalid_trajectory_error::Implementation
