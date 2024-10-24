@@ -21,6 +21,8 @@
 #include "internal_Planner.hpp"
 #include "internal_planning.hpp"
 
+#include <iomanip>
+
 namespace rmf_traffic {
 namespace agv {
 
@@ -591,6 +593,63 @@ Planner::Result Planner::Result::Implementation::generate(
     starts, std::move(goal), std::move(options));
 
   auto plan = Plan::Implementation::make(interface->plan(state));
+
+  if (plan.has_value())
+  {
+    std::ostringstream stringStream;
+    const auto& plan_value = plan.value();
+    const auto& waypoints = plan_value.get_waypoints();
+
+    stringStream <<"generate plan: " << "\n";
+    stringStream <<"number of waypoints: " << waypoints.size() << "\n";
+
+    // Define field widths for better clarity
+    const int index_width = 3;
+    const int name_width = 30;
+    const int map_width = 5;
+    const int coordinate_width = 6;
+    const int precision = 2;
+
+    for (std::size_t i = 0; i < waypoints.size(); ++i)
+    {
+      const auto& waypoint = waypoints.at(i);
+
+      // Default values
+      std::string graph_info = "NULL";  // Initialized as "NULL"
+      std::string name = "NoName";
+      std::string map = "";
+      double x = waypoint.position().x();
+      double y = waypoint.position().y();
+
+      // If graph_index has value, override the default values
+      if (waypoint.graph_index().has_value())
+      {
+        const auto graph_index = waypoint.graph_index().value();
+        const auto& graph_waypoint =
+          interface->get_configuration().graph().get_waypoint(graph_index);
+
+        graph_info = std::to_string(graph_index); // Set graph_info to the graph index
+        name = graph_waypoint.name() ? *graph_waypoint.name() : "NoName";
+        map = graph_waypoint.get_map_name();
+        x = graph_waypoint.get_location().x();
+        y = graph_waypoint.get_location().y();
+      }
+
+      stringStream
+        << "   " << "wp[" << std::right << std::setw(index_width) << i << "]: "
+        << "RMF["
+        << std::fixed << std::setprecision(precision)
+        << std::setw(coordinate_width) << x << ", "
+        << std::setw(coordinate_width) << y << "] "
+        << "[" << std::left << std::setw(map_width) << map << "] "
+        << "[" << std::left << std::setw(name_width) << name << "] "
+        //<< "[" << graph_info << "]"
+        <<"\n";
+
+    }
+
+    std::cout << stringStream.str() << std::endl;
+  }
 
   Planner::Result result;
   result._pimpl = rmf_utils::make_impl<Implementation>(
