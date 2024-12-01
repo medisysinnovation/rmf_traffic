@@ -648,7 +648,8 @@ Planner::Result Planner::Result::Implementation::generate(
 
     }
 
-    std::cout << stringStream.str() << std::endl;
+    //CW comment out logging
+    //std::cout << stringStream.str() << std::endl;
   }
 
   Planner::Result result;
