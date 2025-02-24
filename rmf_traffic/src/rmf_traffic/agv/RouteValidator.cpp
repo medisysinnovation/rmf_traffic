@@ -274,7 +274,8 @@ NegotiatingRouteValidator::Generator::all() const
 {
   const std::size_t N_alts = _pimpl->data->viewer->alternatives().size();
   if (0 == N_alts)
-    return {rmf_utils::make_clone<NegotiatingRouteValidator>(begin())};
+    return {rmf_utils::make_clone<NegotiatingRouteValidator>(begin())}
+  ;
 
   std::vector<std::vector<schedule::Version>> version_queue;
   std::vector<schedule::Version> current_versions;
@@ -541,7 +542,7 @@ NegotiatingRouteValidator::find_conflict(const Route& route) const
             other.first,
             ep.plan_id(),
             ep.route_id(),
-            other_start.index_after(conflict->time)
+            ep.checkpoint_id()
           },
           conflict->time,
           std::make_shared<Route>(route.map(), std::move(other_start))
@@ -592,7 +593,7 @@ NegotiatingRouteValidator::find_conflict(const Route& route) const
             other.first,
             ep.plan_id(),
             ep.route_id(),
-            other_finish.index_after(conflict->time)
+            ep.checkpoint_id()
           },
           conflict->time,
           std::make_shared<Route>(route.map(), std::move(other_finish))
