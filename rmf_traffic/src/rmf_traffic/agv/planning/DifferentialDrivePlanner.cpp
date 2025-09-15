@@ -240,8 +240,8 @@ std::vector<NodePtr> reconstruct_nodes(
     Eigen::Vector3d p0{x[0], x[1], first_midlane_node->yaw};
     Eigen::Vector3d p1{x[0], x[1], last_midlane_node->yaw};
     internal::interpolate_rotation(
-        holding, w_nom, alpha_nom, first_midlane_node->time,
-        p0, p1, rotational_threshold);
+      holding, w_nom, alpha_nom, first_midlane_node->time,
+      p0, p1, rotational_threshold);
   }
 
   for (auto& cruft : cruft_map)
@@ -274,10 +274,16 @@ void stream_trajectory(
   for (const auto& wp : traj)
   {
     ss << wp.index() << ". t=" << time::to_seconds(wp.time().time_since_epoch())
-              << " p=(" << wp.position().transpose()
-              << ") v=<" << wp.velocity().transpose() << "> --> ";
+       << " p=(" << wp.position().transpose()
+       << ") v=<" << wp.velocity().transpose() << "> --> ";
   }
   ss << "(finished)\n";
+}
+
+//==============================================================================
+inline bool same_orientation(double yaw0, double yaw1)
+{
+  return std::abs(rmf_utils::wrap_to_pi(yaw0 - yaw1))*180.0 / M_PI < 1e-2;
 }
 
 //==============================================================================
@@ -326,15 +332,15 @@ std::vector<Plan::Waypoint> find_dependencies(
           // This almost certainly means there's a bug causing an infinite loop.
           // A normal value would be less than 10.
           throw std::runtime_error(
-            "[rmf_traffic::agv::Planner::plan] Excessive iterating while "
-            "searching for plan dependencies. This likely indicates a bug in "
-            "the RouteValidator that was provided.");
+                  "[rmf_traffic::agv::Planner::plan] Excessive iterating while "
+                  "searching for plan dependencies. This likely indicates a bug in "
+                  "the RouteValidator that was provided.");
         }
 
         no_conflicts = true;
 
         for (auto t = dependency_resolution;
-             t < *dependency_window; t += dependency_resolution)
+          t < *dependency_window; t += dependency_resolution)
         {
           route.trajectory().front().adjust_times(-dependency_resolution);
           const auto conflict = validator->find_conflict(route);
@@ -381,26 +387,26 @@ std::vector<Plan::Waypoint> find_dependencies(
               no_conflicts = false;
               found_deps.push_back(dependency);
               const auto wp = [&]() -> std::optional<CheckpointId>
-              {
-                assert(!checkpoint_map.empty());
-                // Find the closest route waypoint less than or equal to
-                // `dependent` that is associated with a plan waypoint.
-                auto c_it = checkpoint_map.upper_bound(dependent);
-                if (c_it == checkpoint_map.begin())
                 {
-                  // If the upper bound is the first element in the checkpoint
-                  // map, then the real dependent is the previous route of this
-                  // plan. We don't have a way to express that in today's RMF,
-                  // so instead we will set the first checkpoint of this route
-                  // as a dependent and then skip further dependency checking.
-                  return std::nullopt;
-                }
+                  assert(!checkpoint_map.empty());
+                  // Find the closest route waypoint less than or equal to
+                  // `dependent` that is associated with a plan waypoint.
+                  auto c_it = checkpoint_map.upper_bound(dependent);
+                  if (c_it == checkpoint_map.begin())
+                  {
+                    // If the upper bound is the first element in the checkpoint
+                    // map, then the real dependent is the previous route of this
+                    // plan. We don't have a way to express that in today's RMF,
+                    // so instead we will set the first checkpoint of this route
+                    // as a dependent and then skip further dependency checking.
+                    return std::nullopt;
+                  }
 
-                --c_it;
-                route.add_dependency(c_it->first, dependency);
+                  --c_it;
+                  route.add_dependency(c_it->first, dependency);
 
-                return c_it->second;
-              } ();
+                  return c_it->second;
+                } ();
 
               if (wp.has_value())
               {
@@ -472,6 +478,72 @@ std::vector<Plan::Waypoint> find_dependencies(
         candidates.begin() + i);
     }
   }
+  
+  std::size_t c_last = 0;
+  std::size_t c = 1;
+  std::size_t c_next = 2;
+  for (; c_next < candidates.size(); ++c_last, ++c, ++c_next)
+  {
+    auto& candidate = candidates[c];
+    if (candidate.waypoint.arrival.empty())
+    {
+      // This was a manually inserted turn-in-place, so let's try to match it
+      // with a trajectory checkpoint
+      const auto p_candidate = candidate.waypoint.position;
+      for (std::size_t r = 0; r < itinerary.size(); ++r)
+      {
+        std::optional<std::size_t> floor_opt;
+        for (const auto& checkpoint : candidates[c_last].waypoint.arrival)
+        {
+          if (checkpoint.route_id != r)
+            continue;
+
+          const auto id = checkpoint.checkpoint_id;
+          if (!floor_opt.has_value())
+            floor_opt = id;
+          else if (*floor_opt < id)
+            floor_opt = id;
+        }
+
+        if (!floor_opt.has_value())
+          continue;
+        const auto floor_id = floor_opt.value();
+
+        std::optional<std::size_t> ceil_opt;
+        for (const auto& checkpoint : candidates[c_next].waypoint.arrival)
+        {
+          if (checkpoint.route_id != r)
+            continue;
+
+          const auto id = checkpoint.checkpoint_id;
+          if (!ceil_opt.has_value())
+            ceil_opt = id;
+          else if (id < *ceil_opt)
+            ceil_opt = id;
+        }
+
+        if (!ceil_opt.has_value())
+          continue;
+        const auto ceil_id = ceil_opt.value();
+
+        // Between the floor and the ceiling, try to find a waypoint in this
+        // trajectory that matches the position of the inserted waypoint.
+        for (std::size_t id = floor_id; id < ceil_id; ++id)
+        {
+          const auto& trajectory_checkpoint = itinerary[r].trajectory()[id];
+          const auto p_trajectory = trajectory_checkpoint.position();
+          const bool same_pos = (p_candidate.block<2, 1>(0, 0) - p_trajectory.block<2, 1>(0, 0)).norm() < 1e-2;
+          const bool same_ori = same_orientation(p_candidate[2], p_trajectory[2]);
+          if (same_pos && same_ori)
+          {
+            // We have a matching checkpoint
+            candidate.waypoint.arrival.push_back(Plan::Checkpoint { r, id });
+            candidate.waypoint.time = trajectory_checkpoint.time();
+          }
+        }
+      }
+    }
+  }
 
   std::vector<Plan::Waypoint> waypoints;
   waypoints.reserve(candidates.size());
@@ -533,12 +605,12 @@ reconstruct_waypoints(
         n->route_from_parent.back().trajectory().back().position()
         .template block<2, 1>(0, 0);
       return WaypointCandidate{
-        true,
-        Plan::Waypoint::Implementation{
-          Eigen::Vector3d{p[0], p[1], n->yaw}, n->time, n->waypoint,
-          n->approach_lanes, {}, {}, n->event, {}
-        },
-        Eigen::Vector3d{0, 0, 0}
+      true,
+      Plan::Waypoint::Implementation{
+        Eigen::Vector3d{p[0], p[1], n->yaw}, n->time, n->waypoint,
+        n->approach_lanes, {}, {}, n->event, {}
+      },
+      Eigen::Vector3d{0, 0, 0}
       };
     };
 
@@ -568,14 +640,15 @@ reconstruct_waypoints(
       const auto opt_tv = [&]() -> std::optional<TimeVelocity>
         {
           if (necessary)
-            return TimeVelocity{node->time, {0, 0}};
+            return TimeVelocity{node->time, {0, 0}}
+          ;
 
           try
           {
             return interpolate_time_along_quadratic_straight_line(
               node->route_from_parent.back().trajectory(), p, 0.0);
           }
-          catch(const std::runtime_error& e)
+          catch (const std::runtime_error& e)
           {
             std::stringstream ss;
             ss << e.what()
@@ -587,7 +660,8 @@ reconstruct_waypoints(
             else
             {
               ss << "Entire trajectory:";
-              for (const rmf_traffic::Trajectory::Waypoint& wp : node->route_from_parent.back().trajectory())
+              for (const rmf_traffic::Trajectory::Waypoint& wp :
+                node->route_from_parent.back().trajectory())
               {
                 ss << " t=" << time::to_seconds(wp.time().time_since_epoch())
                    << " p=(" << wp.position().transpose()
@@ -621,13 +695,13 @@ reconstruct_waypoints(
       const auto [time, v] = *opt_tv;
 
       candidates.push_back({
-        necessary,
-        Plan::Waypoint::Implementation{
-          Eigen::Vector3d{p[0], p[1], yaw}, time, wp_index,
-          {lane_index}, {}, {}, necessary ? node->event : nullptr, {}
-        },
-        {v[0], v[1], 0.0}
-      });
+          necessary,
+          Plan::Waypoint::Implementation{
+            Eigen::Vector3d{p[0], p[1], yaw}, time, wp_index,
+            {lane_index}, {}, {}, necessary ? node->event : nullptr, {}
+          },
+          {v[0], v[1], 0.0}
+        });
     }
 
     for (const auto& skipped : skipped_lanes)
@@ -717,12 +791,12 @@ reconstruct_waypoints(
       }
 
       candidates.back().waypoint.arrival
-        .push_back({itinerary.size()-1, itinerary.back().trajectory().size()-1});
+      .push_back({itinerary.size()-1, itinerary.back().trajectory().size()-1});
     }
   }
 
   std::vector<std::size_t> removals;
-  for (std::size_t i=0; i < itinerary.size(); ++i)
+  for (std::size_t i = 0; i < itinerary.size(); ++i)
   {
     if (itinerary[i].trajectory().size() < 2)
     {
@@ -757,8 +831,8 @@ reconstruct_waypoints(
   }
 
   auto plan_waypoints = find_dependencies(
-      itinerary, candidates, validator,
-      dependency_window, dependency_resolution);
+    itinerary, candidates, validator,
+    dependency_window, dependency_resolution);
 
   return {itinerary, plan_waypoints};
 }
@@ -1054,7 +1128,7 @@ public:
             parent->current_cost + event_cost,
             std::nullopt,
             parent,
-          __LINE__
+            __LINE__
           });
       }
     }
@@ -1194,7 +1268,7 @@ public:
             node->current_cost + exit_event_cost,
             std::nullopt,
             node,
-          __LINE__
+            __LINE__
           });
       }
 
@@ -1284,7 +1358,7 @@ public:
         top->current_cost + cost,
         std::nullopt,
         top,
-          __LINE__
+        __LINE__
       });
   }
 
@@ -1341,7 +1415,7 @@ public:
         top->current_cost + cost,
         std::nullopt,
         top,
-          __LINE__
+        __LINE__
       });
   }
 
@@ -1427,7 +1501,7 @@ public:
 #endif // RMF_TRAFFIC__AGV__PLANNING__DEBUG__PLANNER
       if (traversal_yaw.has_value())
       {
-        const Eigen::Vector3d finish{p0.x(), p0.y(), * traversal_yaw};
+        const Eigen::Vector3d finish{p0.x(), p0.y(), *traversal_yaw};
         internal::interpolate_rotation(
           approach_trajectory, _w_nom, _alpha_nom, start_time,
           start, finish, _rotation_threshold);
@@ -1613,7 +1687,7 @@ public:
             node->current_cost + cost,
             std::nullopt,
             parent,
-          __LINE__
+            __LINE__
           });
       }
 
@@ -1672,7 +1746,7 @@ public:
             node->current_cost + exit_event_cost,
             std::nullopt,
             node,
-          __LINE__
+            __LINE__
           });
       }
 
@@ -1723,7 +1797,7 @@ public:
             search_node->current_cost + approach_info.cost,
             std::nullopt,
             search_node,
-          __LINE__
+            __LINE__
           });
       }
 
@@ -1772,7 +1846,7 @@ public:
             search_node->current_cost + solution_node->info.cost_from_parent,
             std::nullopt,
             search_node,
-          __LINE__
+            __LINE__
           });
 
         solution_node = solution_node->child;
@@ -1802,11 +1876,12 @@ public:
       if (!top->start.has_value())
       {
         throw std::runtime_error(
-          "[rmf_traffic::agv::planning::DifferentialDrivePlanner::expand] "
-          "Node has no waypoint and also no start information. It was produced "
-          "on line [" + std::to_string(top->line) + "]. This should not be "
-          "possible. Please report this critical bug to the maintainers of "
-          "rmf_traffic.");
+                "[rmf_traffic::agv::planning::DifferentialDrivePlanner::expand] "
+                "Node has no waypoint and also no start information. It was produced "
+                "on line [" + std::to_string(
+                  top->line) + "]. This should not be "
+                "possible. Please report this critical bug to the maintainers of "
+                "rmf_traffic.");
       }
       expand_start(top, queue);
       return;
@@ -1880,7 +1955,8 @@ public:
 
     const auto location_opt = start.location();
     if (!location_opt.has_value())
-      return {false, {}};
+      return {false, {}}
+    ;
 
     // This will return all the different trajectories that can be used to
     // approach the start. If it returns empty, that means either you forgot to
@@ -2084,7 +2160,7 @@ public:
         0.0,
         start,
         nullptr,
-          __LINE__
+        __LINE__
       });
   }
 
@@ -2158,7 +2234,8 @@ public:
       if (skip)
         continue;
 
-      while (original_node && !original_node->waypoint.has_value() && !original_node->start.has_value())
+      while (original_node && !original_node->waypoint.has_value() &&
+        !original_node->start.has_value())
       {
         original_node = original_node->parent;
       }
@@ -2377,7 +2454,7 @@ public:
       Issues issues;
 
       ScheduledDifferentialDriveExpander expander{
-        &internal,
+        & internal,
         issues,
         supergraph,
         DifferentialDriveHeuristicAdapter{
@@ -2632,8 +2709,8 @@ State DifferentialDrivePlanner::initiate(
     _supergraph,
     DifferentialDriveHeuristicAdapter{
       _cache->get(),
-    _supergraph,
-    goal.waypoint(),
+      _supergraph,
+      goal.waypoint(),
       rmf_utils::pointer_to_opt(goal.orientation())
     },
     goal,
@@ -2671,8 +2748,8 @@ std::optional<PlanData> DifferentialDrivePlanner::plan(State& state) const
     _supergraph,
     DifferentialDriveHeuristicAdapter{
       _cache->get(),
-    _supergraph,
-    goal.waypoint(),
+      _supergraph,
+      goal.waypoint(),
       rmf_utils::pointer_to_opt(goal.orientation())
     },
     state.conditions.goal,
@@ -2709,8 +2786,8 @@ std::vector<schedule::Itinerary> DifferentialDrivePlanner::rollout(
     _supergraph,
     DifferentialDriveHeuristicAdapter{
       _cache->get(),
-    _supergraph,
-    goal.waypoint(),
+      _supergraph,
+      goal.waypoint(),
       rmf_utils::pointer_to_opt(goal.orientation()),
     },
     goal,
@@ -2795,8 +2872,8 @@ auto DifferentialDrivePlanner::debug_begin(
     _supergraph,
     DifferentialDriveHeuristicAdapter{
       _cache->get(),
-    _supergraph,
-    goal.waypoint(),
+      _supergraph,
+      goal.waypoint(),
       rmf_utils::pointer_to_opt(goal.orientation())
     },
     goal,
